@@ -37,14 +37,16 @@ This repository documents a production homelab environment built on Debian 13, s
 - **Scalable Architecture:** Modular design supporting future expansion
 
 **Service Categories:**
-- **24 containerized services** across 4 functional stacks
-- **Media automation** with *arr ecosystem + Jellyfin
+- **34 containerized services** across 5 functional stacks
+- **Media automation** with *arr ecosystem + Jellyfin + Plex
 - **Cloud services** including photo management and file sync
 - **Smart home** integration with Home Assistant
-- **Full-stack monitoring** with Prometheus + Grafana
+- **Full-stack monitoring** with Prometheus + Grafana + Uptime Kuma
+- **Comprehensive management** with Homepage dashboard, Portainer, Dockge, and Dozzle
 
 **External Access:**
 - Jellyfin Media Server: [jellyfin.unfunky.xyz](https://jellyfin.unfunky.xyz) (Cloudflare Tunnel)
+- Audiobookshelf: Secure Cloudflare Tunnel access
 - Private services accessible via Tailscale mesh VPN
 
 ---
@@ -65,11 +67,12 @@ Primary Network (192.168.1.0/24)
     ├─ Raspberry Pi 3B+ - Moode Audio Server
     └─ Trusted devices, workstations, mobile devices
     ↓
-Docker Network Architecture (4 isolated networks)
-    ├─ proxy_network    - Reverse proxy & management services
-    ├─ media_network    - Media automation stack (*arr apps)
-    ├─ cloud_network    - Cloud services & databases
-    └─ monitoring_network - Metrics collection & visualization
+Docker Network Architecture (5 isolated networks)
+    ├─ proxy_network      - Reverse proxy & management services
+    ├─ media_network      - Media automation stack (*arr apps)
+    ├─ cloud_network      - Cloud services & databases
+    ├─ monitoring_network - Metrics collection & visualization
+    └─ valheim_network    - Game server isolation
     ↓
 Tailscale Mesh VPN (WireGuard-based, 5+ devices)
     └─ Encrypted remote access to all services
@@ -85,26 +88,9 @@ Tailscale Mesh VPN (WireGuard-based, 5+ devices)
 | **Container Runtime** | Docker with Compose V2 | Industry-standard orchestration, simplified dependency management, rapid deployment/rollback |
 | **Public Access** | Cloudflare Tunnel | Eliminates port forwarding, DDoS protection, SSL/TLS automation, zero-trust access control |
 
-### Planned Network Enhancements
-
-**VLAN Segmentation (In Progress):**
-- **VLAN 1 (Production):** Server infrastructure, trusted devices
-- **VLAN 2 (IoT/Untrusted):** Smart home devices, network-isolated
-- **Goal:** Prevent lateral movement from compromised IoT devices to production infrastructure
-
 ---
 
 ## Infrastructure Components
-
-### Network Gateway
-
-**ASUS RT-AC3100 (OpenWRT 23.05)**
-- Custom OpenWRT firmware for advanced network control
-- Dual-band WiFi: 2.4GHz (1000 Mbps) + 5GHz (2167 Mbps)
-- Hardware: Broadcom BCM4709C0 (1.4GHz dual-core ARM), 512MB RAM
-- 4x Gigabit LAN ports + 1x Gigabit WAN
-- DDNS integration for dynamic IP management
-- Future: VLAN tagging and inter-VLAN firewall rules
 
 ### Physical Hosts
 
@@ -115,13 +101,19 @@ Tailscale Mesh VPN (WireGuard-based, 5+ devices)
 | **Motherboard** | MSI B450 | AMD AM4 platform, PCIe for GPU |
 | **Processor** | AMD Ryzen 5 2600 (6C/12T @ 3.4GHz) | Multi-threaded workload handling |
 | **Memory** | 16GB DDR4 | Container orchestration, in-memory caching |
-| **Boot Drive** | 120GB SSD | OS + Docker system volumes |
-| **Data Drive** | 6TB HDD | Media library storage |
+| **Boot Drive** | 120GB SSD (80GB used, 46%) | OS + Docker system volumes |
+| **Data Drive** | 6TB HDD (1.8TB used, 34%) | Media library storage |
 | **GPU** | AMD Radeon R5 340 | Hardware-accelerated transcoding (VA-API) |
-| **OS** | Debian 13 (Trixie) - Headless | Stable, long-term support (LTS ~2031) |
+| **OS** | Debian 13 (Trixie) - Headless | Stable, long-term support |
 | **Network** | Gigabit Ethernet | 1000 Mbps wired connection |
 | **Power** | 80W idle / 125W load | ~$105/year @ $0.15/kWh |
 | **Uptime** | 99.5%+ | Prometheus-monitored availability |
+
+**Current Capacity:**
+- **CPU Usage:** ~11% average (Valheim server primary consumer)
+- **RAM Usage:** 5.4GB / 16GB used (66% free capacity)
+- **Storage:** 3.7TB free (room for significant expansion)
+- **⚠️ Root Disk:** 46% full - monitor and cleanup recommended
 
 **Storage Architecture:**
 ```
@@ -129,16 +121,18 @@ Tailscale Mesh VPN (WireGuard-based, 5+ devices)
 ├─ /boot/efi     (976MB)   - UEFI boot partition
 ├─ /boot         (977MB)   - Kernel and initramfs
 └─ LVM VG        (109.9GB)
-   ├─ root       (81.3GB)  - Root filesystem
+   ├─ root       (81.3GB)  - Root filesystem (46% full)
    └─ swap       (4.4GB)   - Swap space
 
 /dev/sdb1 (5.5TB HDD) - Media Storage
-└─ /mnt/storage
-   ├─ media/              - Jellyfin library
+└─ /mnt/storage (34% used)
+   ├─ media/              - Jellyfin & Plex libraries
    │  ├─ movies/
    │  ├─ tv/
    │  ├─ music/
    │  ├─ books/
+   │  ├─ audiobooks/
+   │  ├─ podcasts/
    │  └─ photos/          - Immich photo library
    ├─ downloads/          - SABnzbd staging
    │  ├─ complete/
@@ -147,67 +141,80 @@ Tailscale Mesh VPN (WireGuard-based, 5+ devices)
    │  ├─ nextcloud/
    │  ├─ immich/
    │  ├─ homeassistant/
+   │  ├─ prometheus/
    │  └─ postgresql/
    └─ backups/            - Automated backup storage
+      ├─ duplicati/       - Cloud backup staging
+      └─ system/          - Local system backups
 ```
 
 **Docker Configuration Storage:**
 ```
 /opt/docker-configs/   - Service configurations (SSD for fast access)
 ~/docker/              - Docker Compose definitions
-  ├─ core/             - Management services
+  ├─ core/             - Management & infrastructure services
   ├─ media/            - Media automation stack
   ├─ cloud/            - Cloud services
-  └─ monitoring/       - Metrics collection
+  ├─ monitoring/       - Metrics collection & visualization
+  └─ gaming/           - Game servers (Valheim)
 ```
-
-**Network Configuration:**
-```
-Interface    IP Address        Purpose
----------    ----------        -------
-eth0         192.168.1.29/24   Primary network (static)
-tailscale0   100.x.x.x/32      Mesh VPN (dynamic)
-docker0      172.17.0.1/16     Default Docker bridge
-```
-
-**Build History:**
-- Initial deployment: Debian 12 (Bookworm) → Migrated to Debian 13 (Trixie)
-- Storage expansion: Added 6TB HDD for media library
-- GPU addition: AMD R5 340 for Jellyfin hardware transcoding
-- Network upgrade: Tailscale mesh VPN integration
-
-#### Secondary Host: Raspberry Pi 3B+
-
-| Component | Specification | Purpose |
-|-----------|---------------|---------|
-| **Model** | Raspberry Pi 3B+ | ARM-based single-board computer |
-| **Purpose** | Moode Audio Server | Networked audio streaming appliance |
-| **Network** | Wired Ethernet | Low-latency audio streaming |
-| **Function** | High-fidelity music streaming to legacy audio equipment | |
-| **Integration** | Connected to production network | Accessible via Tailscale mesh |
 
 ---
 
 ## Services & Applications
 
-**Deployment Model:** All services run as Docker containers, managed via Docker Compose with Portainer for orchestration and monitoring.
+**Deployment Model:** All services run as Docker containers, managed via Docker Compose with Portainer and Dockge for orchestration and monitoring.
 
-### Media Automation Stack (8 containers)
+### Core Management Stack (11 containers)
+
+| Service | Container | Port | Function | Access |
+|---------|-----------|------|----------|--------|
+| **Homepage** | homepage | 3000 | Unified dashboard with service widgets and live stats | Local + Tailscale |
+| **Nginx Proxy Manager** | nginx-proxy-manager | 81 | Reverse proxy with automatic SSL/TLS certificate management | Local + Tailscale |
+| **Portainer** | portainer | 9000 | Docker container orchestration and management UI | Local + Tailscale |
+| **Dockge** | dockge | 5001 | Docker Compose stack management and editor | Local + Tailscale |
+| **Dozzle** | dozzle | 8081 | Real-time log viewer for all containers | Local + Tailscale |
+| **File Browser** | filebrowser | 8082 | Web-based file manager for server storage | Local + Tailscale |
+| **Duplicati** | duplicati | 8200 | Automated backup service with cloud integration | Local + Tailscale |
+| **Watchtower** | watchtower | - | Automated container image updates (daily at 4 AM) | Background |
+| **Autoheal** | autoheal | - | Automatically restarts unhealthy containers | Background |
+| **Cloudflared (Plex)** | cloudflared-plex | - | Cloudflare Tunnel for Plex public access | Background |
+| **Cloudflared (Audiobooks)** | cloudflared-audiobookshelf | - | Cloudflare Tunnel for Audiobookshelf | Background |
+
+**Homepage Dashboard Features:**
+- Live service status and health checks
+- Integrated widgets for media services (Jellyfin, Plex, Sonarr, Radarr, Prowlarr, SABnzbd, Jellyseerr)
+- Quick access links to all 34 services
+- Organized by category: Media, Downloads, Cloud, Smart Home, Management, Monitoring
+- API integration for real-time statistics
+
+**Watchtower Configuration:**
+- Update schedule: Daily at 4:00 AM CST
+- Telegram notifications on container updates
+- Automatic cleanup of old images
+- Monitors all containers except databases (safety precaution)
+
+**Automated Healing:**
+- Autoheal monitors container health checks
+- Automatically restarts unhealthy containers
+- 60-second check interval with 5-minute startup grace period
+
+### Media Automation Stack (9 containers)
 
 | Service | Container | Port | Function | External Access |
 |---------|-----------|------|----------|-----------------|
 | **Jellyfin** | jellyfin | 8096 | Media streaming server with GPU transcoding | **Public** (Cloudflare Tunnel) |
+| **Plex** | plex | 32400 | Music streaming server with remote access | Tailscale VPN |
+| **Audiobookshelf** | audiobookshelf | 13378 | Audiobook & podcast streaming with mobile sync | **Public** (Cloudflare Tunnel) |
 | **Jellyseerr** | jellyseerr | 5055 | Media request and discovery platform | Tailscale VPN |
 | **Sonarr** | sonarr | 8989 | TV series automation and library management | Internal |
 | **Radarr** | radarr | 7878 | Movie automation and library management | Internal |
 | **Prowlarr** | prowlarr | 9696 | Centralized indexer manager for *arr ecosystem | Internal |
-| **Lidarr** | lidarr | 8686 | Music automation and library management | Internal |
-| **Readarr** | readarr | 8787 | Book/audiobook automation and library management | Internal |
 | **SABnzbd** | sabnzbd | 8080 | Usenet download client with category routing | Internal |
 
 **Integration Flow:**
 ```
-Jellyseerr (User Request) 
+Jellyseerr (User Request)
     ↓
 Sonarr/Radarr (Search for content via Prowlarr)
     ↓
@@ -215,15 +222,30 @@ SABnzbd (Download from Usenet)
     ↓
 Sonarr/Radarr (Process, rename, move to media library)
     ↓
-Jellyfin (Media appears in library, ready for streaming)
+Jellyfin/Plex (Media appears in library, ready for streaming)
 ```
 
-**Jellyfin Hardware Transcoding:**
-- GPU: AMD Radeon R5 340
-- API: VA-API (Video Acceleration API)
+**Media Server Features:**
+
+**Jellyfin (Primary Video Streaming):**
+- GPU Hardware Transcoding: AMD Radeon R5 340 (VA-API)
 - Supported codecs: H.264, HEVC, VC1, VP8, VP9
 - Performance: 3-4 concurrent 1080p transcodes
-- Power efficiency: ~30W under transcode load vs ~80W CPU-only
+- Power efficiency: ~30W under transcode vs ~80W CPU-only
+- Public access via Cloudflare Tunnel
+
+**Plex (Music Streaming):**
+- Dedicated music library management
+- Remote access and mobile apps
+- Plexamp support for advanced music features
+- CloudSync integration
+
+**Audiobookshelf (Audiobooks & Podcasts):**
+- Chapter support and bookmarking
+- Mobile app with offline downloads
+- Progress sync across devices
+- Podcast episode management
+- Public access via Cloudflare Tunnel
 
 ### Cloud Services Stack (7 containers)
 
@@ -243,6 +265,7 @@ Jellyfin (Media appears in library, ready for streaming)
 - Document collaboration (Office integration)
 - End-to-end encryption support
 - Mobile apps for iOS/Android
+- Redis caching for optimal performance
 
 **Immich Features:**
 - AI-powered facial recognition
@@ -250,6 +273,7 @@ Jellyfin (Media appears in library, ready for streaming)
 - Geographic photo clustering
 - Automatic backup from mobile devices
 - Privacy-focused (self-hosted alternative to Google Photos)
+- Version: v1.117.0 (stable deployment)
 
 ### Smart Home Integration (1 container)
 
@@ -260,60 +284,52 @@ Jellyfin (Media appears in library, ready for streaming)
 **Features:**
 - IoT device integration and control
 - Automation rule engine
-- Voice assistant integration (planned)
+- Voice assistant integration capability
 - Energy monitoring and analytics
 - Local control (no cloud dependency)
 
 **Note:** Runs in host network mode to enable mDNS/discovery protocols for smart home devices.
 
-### Infrastructure & Management (5 containers)
+### Monitoring & Observability Stack (4 containers)
 
-| Service | Container | Port | Function | Access Method |
-|---------|-----------|------|----------|---------------|
-| **Nginx Proxy Manager** | nginx-proxy-manager | 81 | Reverse proxy with automatic SSL/TLS certificate management | Internal + Tailscale |
-| **Portainer** | portainer | 9000 | Docker container orchestration and management UI | Internal + Tailscale |
-| **Heimdall** | heimdall | 8081 | Application dashboard and service directory | **Planned Public** (Cloudflare Zero Trust) |
-| **Watchtower** | watchtower | - | Automated container image updates with Telegram notifications | Background service |
-| **Cloudflared** | cloudflared | - | Cloudflare Tunnel for secure public access (Jellyfin) | Background service |
-
-**Watchtower Configuration:**
-- Update schedule: Daily at 4:00 AM
-- Telegram notifications on container updates
-- Cleanup old images after successful updates
-- Monitors all containers for new image versions
-
-**Nginx Proxy Manager:**
-- Automatic Let's Encrypt SSL/TLS certificates
-- Wildcard certificate support (*.unfunky.xyz)
-- Cloudflare DNS challenge integration
-- Access control lists and authentication
-
-### Monitoring Stack (4 containers)
-
-| Service | Container | Port | Function | Scrape Interval |
+| Service | Container | Port | Function | Update Frequency |
 |---------|-----------|------|----------|-----------------|
 | **Prometheus** | prometheus | 9090 | Time-series metrics database and alerting engine | 15 seconds |
-| **Grafana** | grafana | 3001 | Metrics visualization and dashboard platform | N/A |
-| **Node Exporter** | node-exporter | 9100 | System-level metrics (CPU, RAM, disk, network) | Scraped by Prometheus |
-| **cAdvisor** | cadvisor | 9200 | Container-level resource monitoring | Scraped by Prometheus |
+| **Grafana** | grafana | 3001 | Metrics visualization and dashboard platform | Real-time |
+| **Node Exporter** | node-exporter | 9100 | System-level metrics (CPU, RAM, disk, network) | Continuous |
+| **Uptime Kuma** | uptime-kuma | 3002 | Service uptime monitoring and status page | 60 seconds |
 
 **Metrics Collected:**
-- System: CPU usage (per-core), memory utilization, disk I/O, network throughput
-- Containers: Per-container CPU/memory, network I/O, filesystem usage, restart counts
-- Docker: Total container count, image storage, volume usage
-- Application: Service-specific metrics (where exporters available)
+- **System:** CPU usage (per-core), memory utilization, disk I/O, network throughput
+- **Containers:** Per-container CPU/memory, network I/O, filesystem usage, restart counts
+- **Docker:** Total container count, image storage, volume usage
+- **Services:** HTTP endpoint health checks, response times, SSL certificate expiration
+
+**Uptime Kuma Features:**
+- HTTP/HTTPS monitoring for all web services
+- Docker container health monitoring
+- Notification support (Telegram, Discord, email)
+- Public status page capability
+- Incident history and uptime statistics
+
+**Grafana Dashboards:**
+1. **Node Exporter Full** - Comprehensive system monitoring
+2. **Docker Container Metrics** - Per-container resource tracking
+3. **System Overview** - High-level infrastructure health
+4. **Custom Dashboards** - Service-specific monitoring
 
 ### Game Servers (1 container)
 
-| Service | Container | Port | Function | Players |
-|---------|-----------|------|----------|---------|
-| **Minecraft Server** | minecraft-forge | 25565 | Modded Forge multiplayer server | 2-8 concurrent |
+| Service | Container | Port | Function | Status |
+|---------|-----------|------|----------|--------|
+| **Valheim** | valheim | 2456-2457 | Dedicated Viking survival multiplayer server | Running (CPU: 11%) |
 
 **Configuration:**
-- Server type: Forge (modded)
-- Port forwarding: 25565/TCP (router configured)
-- Backups: Daily world saves to /mnt/storage/backups
-- Mods: Custom modpack (managed via Portainer)
+- Server type: Dedicated (Linux)
+- Network: Isolated valheim_network
+- Backups: Automated hourly world saves
+- Auto-updates: Every 3 hours
+- Capacity: 2-10 concurrent players
 
 ---
 
@@ -321,77 +337,59 @@ Jellyfin (Media appears in library, ready for streaming)
 
 ### Monitoring Architecture
 
-**Philosophy:** Comprehensive observability through metrics collection, visualization, and alerting.
+**Philosophy:** Comprehensive observability through metrics collection, visualization, uptime monitoring, and log aggregation.
 
 **Data Pipeline:**
 ```
 System Resources → Node Exporter (port 9100) ──┐
-Docker Containers → cAdvisor (port 9200) ──────┤
-Custom Metrics → (Future: Custom exporters) ───┼→ Prometheus (port 9090) → Grafana (port 3001)
-                                                │
-Application Logs → (Future: Loki + Promtail) ──┘
+Docker Containers → Container Metrics ─────────┤
+HTTP Endpoints → Uptime Kuma (port 3002) ──────┼→ Prometheus (port 9090) → Grafana (port 3001)
+Container Logs → Dozzle (port 8081) ───────────┤
+Service Status → Homepage (port 3000) ─────────┘
 ```
 
-### Grafana Dashboards
+### Multi-Layer Monitoring Approach
 
-**1. Node Exporter Full (Dashboard ID 1860)**
-- **Purpose:** Comprehensive system-level monitoring
-- **Metrics:**
-  - CPU utilization (aggregate + per-core breakdown)
-  - Memory usage, available capacity, swap utilization
-  - Disk I/O rates (read/write IOPS and throughput)
-  - Network traffic (bandwidth, packet rates, errors)
-  - Filesystem usage and inode consumption
-  - System load averages (1m, 5m, 15m)
-  - Temperature sensors (CPU, motherboard)
-- **Update Frequency:** 15-second granularity
-- **Historical Data:** 30-day retention
+**1. Infrastructure Monitoring (Prometheus + Grafana)**
+- System resource metrics (CPU, RAM, disk, network)
+- Container resource utilization
+- 30-day historical data retention
+- 15-second metric collection interval
 
-**2. Docker Container Monitoring (Dashboard ID 893)**
-- **Purpose:** Per-container resource tracking
-- **Metrics:**
-  - CPU usage per container (% of total system)
-  - Memory allocation and consumption
-  - Network I/O statistics (sent/received bytes)
-  - Filesystem read/write operations
-  - Container health status and restart counts
-  - Image sizes and storage consumption
-- **Coverage:** All 24 active containers
-- **Alerting:** Visual indicators for resource-constrained containers
+**2. Service Uptime Monitoring (Uptime Kuma)**
+- HTTP health checks for all web services
+- Docker container health status
+- SSL certificate monitoring
+- Incident tracking and notifications
+- Public status page capability
 
-**3. System Overview (Custom)**
-- **Purpose:** High-level infrastructure health dashboard
-- **Panels:**
-  - Service uptime status (all 24 containers)
-  - Disk space utilization (boot drive + media drive)
-  - Network bandwidth usage (7-day trend)
-  - Container restart frequency
-  - Quick links to service UIs
-- **Use Case:** At-a-glance health check, daily monitoring
+**3. Log Monitoring (Dozzle)**
+- Real-time log streaming from all containers
+- Search and filter capabilities
+- Multi-container log aggregation
+- No log persistence (ephemeral viewing)
 
-### Planned Monitoring Enhancements
+**4. Dashboard & Management (Homepage)**
+- Service status overview
+- Integrated widgets with live statistics
+- Quick access to all services
+- Health check integration
 
-**Security Monitoring (In Progress):**
-- Fail2Ban Prometheus exporter (IP ban metrics)
-- GeoIP attack mapping (geographic visualization of blocked IPs)
-- SSH authentication attempt tracking
-- Real-time Telegram alerts on security events
+### Key Metrics & Dashboards
 
-**Application Performance Monitoring:**
-- Jellyfin playback metrics (concurrent streams, transcoding load)
-- SABnzbd download queue statistics
-- Database query performance (Nextcloud, Immich)
-- Response time tracking for web services
+**System Health:**
+- CPU: ~11% average (Valheim server primary load)
+- RAM: 5.4GB / 16GB used (66% free)
+- Root Disk: 46% full (monitoring required)
+- Data Disk: 34% full (3.7TB free)
+- Network: Gigabit fully utilized
+- Uptime: 99.5%+ availability
 
-**Alert System:**
-- Grafana alerting rules for threshold violations
-- Telegram bot integration for real-time notifications
-- Alert categories: Critical (immediate), Warning (review), Info (logged)
-- Planned thresholds:
-  - CPU > 80% sustained for 5 minutes
-  - Memory > 90% available
-  - Disk > 85% full
-  - Container restart loops (3+ restarts in 10 minutes)
+**Service Monitoring:**
+- All 34 containers monitored for health
+- Automated restart on failure (Autoheal)
+- Daily update checks (Watchtower)
+- Real-time log access (Dozzle)
 
 ---
 
@@ -408,17 +406,6 @@ Application Logs → (Future: Loki + Promtail) ──┘
 - Family member devices (limited access scope)
 - Additional trusted devices
 
-**Network Topology:**
-```
-Tailscale Coordination Server (cloud-hosted)
-    ↓
-WireGuard Encrypted Mesh (automatic peering)
-    ├─ Debian Server (100.x.x.1) - Exit node
-    ├─ Laptop (100.x.x.2)
-    ├─ Mobile (100.x.x.3)
-    └─ Other Devices (100.x.x.4+)
-```
-
 **Advantages:**
 - **Zero Configuration:** Automatic NAT traversal, no manual port forwarding
 - **Low Latency:** Direct peer-to-peer connections when network topology permits
@@ -428,8 +415,8 @@ WireGuard Encrypted Mesh (automatic peering)
 
 **Use Cases:**
 - Secure SSH access to server infrastructure from anywhere
-- Access to internal web services (Portainer, Grafana, *arr apps)
-- Remote media streaming via Jellyfin (Cloudflare Tunnel alternative)
+- Access to internal web services (Portainer, Grafana, *arr apps, Homepage)
+- Remote media streaming via Jellyfin (alternative to Cloudflare)
 - Network-level access to entire homelab from remote locations
 - Exit node functionality for secure internet browsing when traveling
 
@@ -440,24 +427,27 @@ WireGuard Encrypted Mesh (automatic peering)
 - **Access Method:** Cloudflare Tunnel (cloudflared container)
 - **Security Layers:**
   1. Cloudflare DDoS protection and WAF
-  2. Zero Trust application authentication (planned)
-  3. Jellyfin user authentication
-  4. SSL/TLS encryption (automatic certificate management)
+  2. Jellyfin user authentication
+  3. SSL/TLS encryption (automatic certificate management)
 - **Performance:** CDN-accelerated delivery, sub-200ms latency globally
 
-**Heimdall Dashboard (Planned):**
-- **URL:** https://home.unfunky.xyz (pending deployment)
-- **Authentication:** Cloudflare Zero Trust with email verification
-- **Function:** Centralized portal for accessing internal services
-- **Security:** Multi-layer authentication (Cloudflare → Heimdall)
+**Audiobookshelf:**
+- **Access Method:** Cloudflare Tunnel (dedicated cloudflared container)
+- **Function:** Public access to audiobook and podcast library
+- **Security:** User authentication required
 
 ### Access Control Matrix
 
 | Service | Local Network | Tailscale VPN | Public Internet | Authentication |
 |---------|---------------|---------------|-----------------|----------------|
+| Homepage | ✅ Direct | ✅ Direct | ❌ Blocked | N/A |
 | Jellyfin | ✅ Direct | ✅ Direct | ✅ Cloudflare Tunnel | User login |
-| Portainer | ✅ Direct | ✅ Direct | ❌ Blocked | User login |
+| Plex | ✅ Direct | ✅ Direct | ❌ Blocked | Plex account |
+| Audiobookshelf | ✅ Direct | ✅ Direct | ✅ Cloudflare Tunnel | User login |
+| Portainer | ✅ Direct | ✅ Direct | ❌ Blocked | Admin login |
+| Dockge | ✅ Direct | ✅ Direct | ❌ Blocked | N/A |
 | Grafana | ✅ Direct | ✅ Direct | ❌ Blocked | Admin login |
+| Uptime Kuma | ✅ Direct | ✅ Direct | ❌ Blocked | Admin login |
 | Nextcloud | ✅ Direct | ✅ Direct | ❌ Blocked | User login |
 | Immich | ✅ Direct | ✅ Direct | ❌ Blocked | User login |
 | Home Assistant | ✅ Direct | ✅ Direct | ❌ Blocked | User login |
@@ -472,16 +462,7 @@ WireGuard Encrypted Mesh (automatic peering)
 
 **Form Factor:** Small Form Factor (SFF) for space-efficient deployment
 
-**Chassis & Cooling:**
-- Compact tower case with optimized airflow
-- Aftermarket CPU cooler (Cooler Master Hyper 212)
-- 3x 120mm case fans (intake + exhaust configuration)
-- Thermal performance:
-  - Idle: ~45°C CPU, ~40°C GPU
-  - Load: ~65°C CPU, ~55°C GPU
-  - Ambient temp compensation
-
-**Power Consumption Breakdown:**
+**Power Consumption & Efficiency:**
 - Idle state: ~80W (system + HDD spin)
 - Media streaming (no transcode): ~90W
 - Single transcode (GPU): ~110W
@@ -515,13 +496,6 @@ WireGuard Encrypted Mesh (automatic peering)
   - DDNS integration (No-IP, DuckDNS)
   - UPnP for automatic port mapping
   - Advanced firewall with custom iptables rules
-  - Future: VLAN tagging support
-
-**Network Performance:**
-- WAN-LAN throughput: ~940 Mbps (wire speed)
-- WiFi throughput: ~600 Mbps (5GHz, ideal conditions)
-- NAT table capacity: 65,536 simultaneous connections
-- Uptime: 99.9%+ (router reboots only for firmware updates)
 
 ---
 
@@ -531,17 +505,27 @@ This homelab infrastructure showcases proficiency across multiple technical doma
 
 ### Systems Administration
 - **Linux Server Management:** Debian 13 installation, configuration, and maintenance
-- **Storage Management:** LVM configuration, filesystem optimization, automated mounting
+- **Storage Management:** LVM configuration, filesystem optimization, automated mounting, capacity planning
 - **User & Permission Management:** Sudo configuration, group membership, file permissions
 - **System Monitoring:** Resource tracking, performance optimization, uptime management
 - **Security Hardening:** SSH key-based authentication, firewall configuration (UFW), user isolation
+- **Capacity Planning:** Proactive monitoring of disk usage and resource allocation
 
 ### Containerization & Orchestration
 - **Docker Fundamentals:** Image management, container lifecycle, volume/network configuration
 - **Docker Compose:** Multi-container application definitions, service dependencies, network isolation
-- **Service Deployment:** 24-container infrastructure with declarative configuration
+- **Service Deployment:** 34-container infrastructure with declarative configuration
 - **Container Networking:** Custom bridge networks, service discovery, inter-container communication
 - **Resource Management:** CPU/memory limits, restart policies, health checks
+- **Container Health:** Automated healing with health check monitoring
+
+### Management & Operations
+- **Service Dashboard:** Homepage deployment with widget integration and API management
+- **Container Orchestration:** Portainer and Dockge for visual management
+- **Log Aggregation:** Centralized logging with Dozzle for troubleshooting
+- **Backup Strategy:** Duplicati integration with cloud storage providers
+- **File Management:** Web-based file browser for remote administration
+- **Update Automation:** Watchtower configuration with notification integration
 
 ### Networking
 - **Network Architecture:** LAN design, static IP assignment, DHCP reservation
@@ -549,34 +533,35 @@ This homelab infrastructure showcases proficiency across multiple technical doma
 - **VPN Technologies:** Tailscale mesh network deployment, WireGuard protocol understanding
 - **Reverse Proxy:** Nginx Proxy Manager configuration, SSL/TLS certificate automation
 - **DNS Management:** Cloudflare integration, DDNS for dynamic IP handling
-- **Future:** VLAN segmentation, inter-VLAN firewall rules, network isolation
+- **Service Isolation:** Docker network segmentation for security
 
 ### Monitoring & Observability
 - **Metrics Collection:** Prometheus time-series database configuration and tuning
 - **Visualization:** Grafana dashboard design, panel creation, query optimization
 - **System Metrics:** Node Exporter deployment, custom metric collection
-- **Container Monitoring:** cAdvisor integration, per-container resource tracking
-- **Data Retention:** Prometheus storage configuration, historical data management
-- **Planned:** Alert rule creation, notification channels (Telegram, email)
+- **Uptime Monitoring:** Uptime Kuma deployment with health checks and notifications
+- **Log Management:** Real-time log viewing with Dozzle
+- **Service Integration:** Homepage widget integration with API key management
 
 ### Security
 - **Access Control:** Multi-layer authentication, principle of least privilege
 - **Network Security:** Firewall rule design, port management, service isolation
 - **Encryption:** SSL/TLS certificate management, VPN encryption (WireGuard)
-- **SSH Hardening:** Key-based authentication, root login disabled, fail2ban (planned)
-- **Zero Trust Architecture:** Cloudflare Zero Trust integration (in progress)
-- **Planned:** Intrusion detection (Fail2Ban), geographic IP blocking, security metrics
+- **SSH Hardening:** Key-based authentication, root login disabled
+- **Service Hardening:** Container isolation, health checks, automated restart
+- **Zero Trust Architecture:** Cloudflare Zero Trust integration for public services
 
 ### Cloud & DevOps Practices
 - **Infrastructure as Code:** Declarative service definitions, version-controlled configurations
 - **Automated Deployment:** Docker Compose-based service orchestration
-- **Backup Strategy:** Automated backup scripts, scheduled execution via cron
-- **Update Management:** Watchtower automated container updates with notifications
+- **Backup Strategy:** Automated backup with Duplicati and cloud integration
+- **Update Management:** Watchtower automated container updates with Telegram notifications
 - **Documentation:** Comprehensive README, inline comments, troubleshooting guides
-- **Version Control:** Git-based configuration management (planned full GitOps)
+- **Version Control:** Git-based configuration management
 
 ### Application Integration
 - **Media Automation:** *arr ecosystem integration (Sonarr, Radarr, Prowlarr, etc.)
+- **Multi-Server Setup:** Jellyfin for video + Plex for music + Audiobookshelf for audiobooks
 - **Database Administration:** PostgreSQL deployment and configuration for Nextcloud/Immich
 - **Caching Layers:** Redis integration for application performance
 - **API Integration:** Cloudflare API, Telegram Bot API, service webhooks
@@ -586,7 +571,24 @@ This homelab infrastructure showcases proficiency across multiple technical doma
 
 ## Future Enhancements
 
-### Security Improvements (High Priority - 1-2 weeks)
+### Immediate Priority (Next 1-2 Weeks)
+
+**Root Disk Cleanup:**
+- Current: 46% full (approaching capacity limits)
+- Action: Docker system prune, old image cleanup, log rotation
+- Target: Reduce to <40% usage
+
+**Container Version Updates:**
+- Current: Many containers 16-20 months old
+- Action: Update pinned versions or switch to :latest tags
+- Priority: Immich, Jellyfin, Portainer, Sonarr, Radarr, Jellyseerr
+
+**Power Monitoring:**
+- Action: Deploy smart plug with power monitoring
+- Integration: Home Assistant + Homepage widget
+- Purpose: Track server power consumption and costs
+
+### Security Improvements (High Priority - 2-4 weeks)
 
 **Fail2Ban Intrusion Prevention:**
 - Deploy Fail2Ban for SSH and web service protection
@@ -601,13 +603,12 @@ This homelab infrastructure showcases proficiency across multiple technical doma
 - Migrate smart home devices to isolated IoT network
 - Document VLAN configuration in OpenWRT
 
-**Access Hardening:**
-- Enable Cloudflare Zero Trust for Heimdall dashboard
-- Implement 2FA for critical services (Portainer, Grafana)
-- Deploy Authelia or Authentik for unified SSO
+**2FA & Access Hardening:**
+- Implement 2FA for critical services (Portainer, Grafana, Nextcloud)
+- Consider Authelia or Authentik for unified SSO
 - Audit and document all service authentication mechanisms
 
-### Monitoring & Alerting (Medium Priority - 2-4 weeks)
+### Monitoring & Alerting (Medium Priority - 1-2 months)
 
 **Grafana Alert Rules:**
 - CPU usage > 80% sustained (5 minute window)
@@ -620,15 +621,15 @@ This homelab infrastructure showcases proficiency across multiple technical doma
 - Deploy Loki + Promtail stack for log aggregation
 - Integrate with Grafana for unified observability
 - Log retention policy (30-day rotation)
-- Search and filtering capabilities
+- Replace Dozzle with persistent log solution
 
 **Additional Exporters:**
 - Jellyfin metrics exporter (stream count, transcode load)
 - SABnzbd metrics exporter (queue depth, download rate)
 - Nextcloud metrics exporter (user count, storage usage)
-- UPS monitoring (when hardware acquired)
+- Portainer metrics integration
 
-### Infrastructure Automation (Medium Priority - 1-2 months)
+### Infrastructure Automation (Medium Priority - 2-3 months)
 
 **Ansible Deployment:**
 - Convert Docker Compose to Ansible playbooks
@@ -638,11 +639,10 @@ This homelab infrastructure showcases proficiency across multiple technical doma
 - Multi-environment support (dev/staging/prod)
 
 **Backup Enhancements:**
-- Offsite backup replication (cloud storage integration)
+- Offsite backup replication (cloud storage integration via Duplicati)
 - Automated restore testing (monthly validation)
-- Database-specific backup strategies (pg_dump, etc.)
-- Immutable backup storage (write-once-read-many)
-- Backup monitoring and alerting
+- Database-specific backup strategies (pg_dump automation)
+- Backup monitoring and alerting via Uptime Kuma
 
 **GitOps Workflow:**
 - GitHub repository for infrastructure-as-code
@@ -653,40 +653,32 @@ This homelab infrastructure showcases proficiency across multiple technical doma
 
 ### Service Expansion (Low Priority - 3-6 months)
 
-**New Services:**
+**Planned New Services:**
 - **Vaultwarden:** Self-hosted password manager (Bitwarden alternative)
 - **Paperless-ngx:** Document scanning and management
-- **Audiobookshelf:** Audiobook streaming and library management
-- **Actual Budget:** Personal finance and budgeting application
 - **AdGuard Home:** DNS-level ad blocking and tracking prevention
-- **Uptime Kuma:** Service uptime monitoring and status page
+- **Actual Budget:** Personal finance and budgeting application
+- **Kavita:** eBook and manga reader
+- **Bazarr:** Subtitle management for media library
+- **Tautulli:** Plex statistics and monitoring
 
 **Home Assistant Expansion:**
 - Voice assistant integration (local processing)
 - Energy monitoring dashboards
 - Automation rule library expansion
 - Mobile app presence detection
-- Climate control integration
 
-**Game Servers:**
-- Additional Minecraft servers (vanilla, modded variants)
-- Valheim dedicated server
-- Terraria multiplayer server
-- Automated backup and update scripts
+**Game Server Expansion:**
+- Additional game servers (Minecraft, Terraria, etc.)
+- Pterodactyl Panel for unified game server management
 
 ### Hardware Upgrades (Long-Term - 6-12 months)
 
-**Compute Expansion:**
+**Compute & Storage Expansion:**
 - RAM upgrade: 16GB → 32GB (support more containers)
 - Storage upgrade: Additional 6TB HDD (RAID 1 mirror for redundancy)
 - UPS addition: Graceful shutdown on power loss, runtime monitoring
 - Network upgrade: 2.5GbE NIC for faster local transfers
-
-**High Availability:**
-- Second server node (clustered deployment)
-- Docker Swarm or Kubernetes evaluation
-- Shared storage via NFS or GlusterFS
-- Load balancing for critical services
 
 ---
 
@@ -694,80 +686,73 @@ This homelab infrastructure showcases proficiency across multiple technical doma
 
 ### Repository Structure
 
-This repository contains comprehensive documentation and configuration files:
-
 ```
 homelab-infrastructure/
-├─ README.md                    - This file (overview and architecture)
-├─ AL-HOMELAB-COMPLETE-GUIDE.md - Detailed setup and troubleshooting guide
-├─ HOMELAB-WEEKLY-TASKS.md      - Maintenance task checklist
+├─ README.md                    - This file (updated overview and architecture)
+├─ docs/
+│  ├─ WHATS-NEXT-ROADMAP.md    - Detailed enhancement roadmap
+│  ├─ IMPLEMENTATION-COMPLETE.md - Recent implementation log
+│  ├─ CONTAINERS-FIXED.md       - Container troubleshooting history
+│  ├─ security-monitoring.md    - Security implementation guide
+│  └─ network-diagram.png       - Network topology visualization
 ├─ docker/
 │  ├─ core/
-│  │  └─ docker-compose.yml     - Management services
+│  │  └─ docker-compose.yml     - Management & infrastructure services
 │  ├─ media/
 │  │  └─ docker-compose.yml     - Media automation stack
 │  ├─ cloud/
 │  │  └─ docker-compose.yml     - Cloud services
-│  └─ monitoring/
-│     └─ docker-compose.yml     - Prometheus + Grafana
+│  ├─ monitoring/
+│  │  └─ docker-compose.yml     - Prometheus + Grafana + Uptime Kuma
+│  └─ gaming/
+│     └─ valheim/
+│        └─ docker-compose.yml  - Valheim dedicated server
 ├─ scripts/
 │  ├─ backup-homelab.sh         - Automated backup script
 │  └─ homelab-status.sh         - System status checker
-├─ docs/
-│  ├─ network-diagram.png       - Network topology visualization
-│  ├─ screenshots/              - Dashboard and UI screenshots
-│  └─ guides/                   - Service-specific configuration guides
 └─ LICENSE                      - MIT License
 ```
-
-### Additional Documentation
-
-**Internal Reference Guides:**
-- Complete service configuration guide (API keys, credentials - separate secure document)
-- Troubleshooting runbook (common issues and resolutions)
-- Disaster recovery procedures (restoration from backup)
-- Network diagram with IP addressing scheme
-
-**Planned Documentation:**
-- OpenWRT VLAN configuration tutorial
-- Tailscale mesh network deployment guide
-- Fail2Ban configuration and tuning guide
-- Ansible playbook documentation
-- SSL/TLS certificate automation workflow
 
 ---
 
 ## Project Timeline
 
-**Initial Deployment:** December 2025  
-**Current Phase:** Enhancement and optimization  
-**Last Updated:** January 2026  
-**Status:** 🟢 Active Development  
+**Initial Deployment:** December 2025
+**Major Expansion:** February 2026
+**Last Updated:** February 2026
+**Status:** 🟢 Active Production
 
-### Changelog Highlights
+### Recent Updates (February 2026)
 
-**January 2026:**
-- Migrated from Debian 12 to Debian 13 (Trixie)
-- Added Immich photo management platform
-- Integrated Home Assistant for smart home control
-- Deployed Nextcloud for file sync and collaboration
-- Implemented automated backup system with cron scheduling
-- Expanded Grafana monitoring dashboards
+**Infrastructure Expansion:**
+- Expanded from 24 to 34 containers
+- Added Homepage dashboard with service widgets
+- Deployed Dockge for Docker Compose management
+- Integrated Dozzle for real-time log viewing
+- Added File Browser for web-based file management
+- Implemented Duplicati for automated cloud backups
+- Deployed Uptime Kuma for service monitoring
+- Added Autoheal for automatic container recovery
 
-**December 2025:**
-- Initial homelab deployment on Debian 12
-- Configured 24-container Docker infrastructure
-- Deployed media automation stack (*arr ecosystem)
-- Integrated Tailscale mesh VPN
-- Established Cloudflare Tunnel for Jellyfin public access
-- Set up Prometheus + Grafana monitoring
+**Media Services:**
+- Added Plex for dedicated music streaming
+- Deployed Audiobookshelf with Cloudflare Tunnel access
+- Configured second Cloudflare Tunnel for public access
 
-**Planned for February 2026:**
-- Fail2Ban deployment with security monitoring
-- VLAN network segmentation
-- Cloudflare Zero Trust for Heimdall
-- Ansible-based infrastructure automation
-- Expanded alerting and notification system
+**Game Servers:**
+- Deployed Valheim dedicated server
+- Isolated gaming network for security
+
+**Monitoring Enhancements:**
+- Integrated Uptime Kuma for HTTP health checks
+- Added Homepage widgets with live API statistics
+- Enhanced Grafana dashboard coverage
+
+**Optimizations:**
+- Resolved container health issues
+- Configured API key management for all services
+- Improved service isolation with dedicated networks
+- Documented capacity planning metrics
 
 ---
 
@@ -775,13 +760,14 @@ homelab-infrastructure/
 
 **Albert Weiner**
 
-📧 Email: [ajgreenboy@gmail.com](mailto:ajgreenboy@gmail.com)  
-💼 LinkedIn: [linkedin.com/in/al-weiner-29865529a](https://www.linkedin.com/in/al-weiner-29865529a/)  
-🐙 GitHub: [github.com/ajgr33nboy](https://github.com/ajgr33nboy)  
+📧 Email: [ajgreenboy@gmail.com](mailto:ajgreenboy@gmail.com)
+💼 LinkedIn: [linkedin.com/in/al-weiner-29865529a](https://www.linkedin.com/in/al-weiner-29865529a/)
+🐙 GitHub: [github.com/ajgr33nboy](https://github.com/ajgr33nboy)
 🌐 Portfolio: [unfunky.xyz](https://unfunky.xyz)
 
 **Live Demos:**
 - 🎬 Jellyfin Media Server: [jellyfin.unfunky.xyz](https://jellyfin.unfunky.xyz)
+- 📚 Audiobookshelf: Secure public access via Cloudflare Tunnel
 - 📊 Monitoring Dashboard: Internal access via Tailscale VPN
 - 📷 Photo Gallery: Internal access via Tailscale VPN
 
@@ -792,11 +778,13 @@ homelab-infrastructure/
 **Technologies Used:**
 - Debian Project
 - Docker & Docker Compose
-- Prometheus & Grafana
+- Prometheus, Grafana & Uptime Kuma
 - Tailscale (WireGuard)
 - Cloudflare
 - LinuxServer.io container images
 - Servarr ecosystem (*arr applications)
+- Gethomepage (Homepage dashboard)
+- Louislam (Dockge, Uptime Kuma)
 
 **Community Resources:**
 - r/homelab
@@ -804,6 +792,7 @@ homelab-infrastructure/
 - Servarr Discord community
 - LinuxServer.io Discord
 - Tailscale community forum
+- Homepage Discord
 
 ---
 
@@ -815,9 +804,10 @@ See [LICENSE](LICENSE) file for full details.
 
 ---
 
-**🏠 Built with passion in Minneapolis, Minnesota**  
-**⚡ Powered by Debian, Docker, and caffeine**  
+**🏠 Built with passion in Minneapolis, Minnesota**
+**⚡ Powered by Debian, Docker, and caffeine**
 **🎯 Demonstrating enterprise DevOps practices at home scale**
+**📊 34 containers, 5.5TB storage, 99.5%+ uptime**
 
 ---
 
